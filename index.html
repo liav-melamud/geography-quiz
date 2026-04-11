@@ -664,25 +664,48 @@ const firebaseConfig = {
 };
 
 /* ===== LOCAL STORAGE EMULATOR (used when Firebase is not configured) ===== */
-function _lsGet(path) {
-  try { return JSON.parse(localStorage.getItem('fb/' + path)); } catch(e) { return null; }
+// Stores everything in a single JSON tree under localStorage key 'firebaseDB'
+function _dbGet() { try { return JSON.parse(localStorage.getItem('firebaseDB')) || {}; } catch(e) { return {}; } }
+function _dbSave(obj) { localStorage.setItem('firebaseDB', JSON.stringify(obj)); }
+function _getAtPath(obj, parts) { return parts.reduce((o, p) => (o && typeof o === 'object' ? o[p] : undefined), obj); }
+function _setAtPath(obj, parts, val) {
+  if (parts.length === 0) return val === null ? undefined : val;
+  const key = parts[0];
+  const base = (obj && typeof obj === 'object') ? { ...obj } : {};
+  const child = _setAtPath(base[key], parts.slice(1), val);
+  if (child === undefined) { delete base[key]; } else { base[key] = child; }
+  return base;
 }
-function _lsSet(path, val) {
-  if (val === null) { localStorage.removeItem('fb/' + path); }
-  else { localStorage.setItem('fb/' + path, JSON.stringify(val)); }
-}
-function _lsMerge(path, updates) {
-  const existing = _lsGet(path) || {};
-  Object.entries(updates).forEach(([k, v]) => { if (v === null) delete existing[k]; else existing[k] = v; });
-  _lsSet(path, existing);
+function _mergeAtPath(obj, parts, updates) {
+  if (parts.length === 0) {
+    const base = (obj && typeof obj === 'object') ? { ...obj } : {};
+    Object.entries(updates).forEach(([k, v]) => { if (v === null) delete base[k]; else base[k] = v; });
+    return base;
+  }
+  const key = parts[0];
+  const base = (obj && typeof obj === 'object') ? { ...obj } : {};
+  base[key] = _mergeAtPath(base[key], parts.slice(1), updates);
+  return base;
 }
 function _makeRef(path) {
+  const parts = path.split('/').filter(Boolean);
   return {
-    once()        { const d = _lsGet(path); return Promise.resolve({ exists: () => d !== null, val: () => d, forEach(cb) { if (d && typeof d === 'object') Object.entries(d).forEach(([k,v]) => cb({ key: k, val: () => v })); } }); },
-    set(val)      { _lsSet(path, val); return Promise.resolve(); },
-    update(upd)   { _lsMerge(path, upd); return Promise.resolve(); },
-    on(ev, cb)    { const d = _lsGet(path); cb({ exists: () => d !== null, val: () => d }); return () => {}; },
-    child(sub)    { return _makeRef(path + '/' + sub); }
+    once() {
+      const val = _getAtPath(_dbGet(), parts) ?? null;
+      return Promise.resolve({
+        exists:  () => val !== null && val !== undefined,
+        val:     () => val,
+        forEach: (cb) => { if (val && typeof val === 'object') Object.entries(val).forEach(([k,v]) => cb({ key: k, val: () => v })); }
+      });
+    },
+    set(val)    { _dbSave(_setAtPath(_dbGet(), parts, val)); return Promise.resolve(); },
+    update(upd) { _dbSave(_mergeAtPath(_dbGet(), parts, upd)); return Promise.resolve(); },
+    on(_ev, cb) {
+      const val = _getAtPath(_dbGet(), parts) ?? null;
+      cb({ exists: () => val !== null, val: () => val, forEach: (fn) => { if (val && typeof val === 'object') Object.entries(val).forEach(([k,v]) => fn({ key: k, val: () => v })); } });
+      return () => {};
+    },
+    child(sub)  { return _makeRef(path + '/' + sub); }
   };
 }
 const localDB = { ref: path => _makeRef(path) };
