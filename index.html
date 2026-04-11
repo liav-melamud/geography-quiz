@@ -5,6 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>חידון גאוגרפיה</title>
 <link href="https://fonts.googleapis.com/css2?family=Noto+Serif+Hebrew:wght@400;700;900&family=Rubik:wght@300;400;600;700&display=swap" rel="stylesheet">
+<script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-database-compat.js"></script>
 <style>
   :root {
     --bg: #0a0e1a;
@@ -650,20 +652,24 @@ const ALL_QUESTIONS = {
   ]
 };
 
-const HINT_COST=3, TOKENS_START=9;
-let currentLevel=null, tokens=TOKENS_START, hintsRevealed=[], answered=[], correctCount=0, wrongAttempts=[], QUESTIONS=[];
-let currentUser = null;
+/* ===== FIREBASE CONFIG — replace placeholders with your project values ===== */
+const firebaseConfig = {
+  apiKey:            "PASTE_YOUR_API_KEY",
+  authDomain:        "PASTE_YOUR_PROJECT_ID.firebaseapp.com",
+  databaseURL:       "https://PASTE_YOUR_PROJECT_ID-default-rtdb.firebaseio.com",
+  projectId:         "PASTE_YOUR_PROJECT_ID",
+  storageBucket:     "PASTE_YOUR_PROJECT_ID.appspot.com",
+  messagingSenderId: "PASTE_YOUR_MESSAGING_SENDER_ID",
+  appId:             "PASTE_YOUR_APP_ID"
+};
+firebase.initializeApp(firebaseConfig);
+const db = firebase.database();
 
-/* ===== USER / TOKEN PERSISTENCE ===== */
-function getMonthKey() {
-  const d = new Date();
-  return d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0');
-}
-function getMonthLabel() {
-  const d = new Date();
-  const months = ['ינואר','פברואר','מרץ','אפריל','מאי','יוני','יולי','אוגוסט','ספטמבר','אוקטובר','נובמבר','דצמבר'];
-  return months[d.getMonth()] + ' ' + d.getFullYear();
-}
+const HINT_COST = 3, TOKENS_START = 9;
+let currentLevel = null, tokens = TOKENS_START, hintsRevealed = [], answered = [], correctCount = 0, wrongAttempts = [], QUESTIONS = [];
+let currentUser = null;
+let userData = {};       // local mirror of the current user's Firebase node
+let _userListener = null; // Firebase .on() unsubscribe handle
 
 /* ===== HEBREW LETTERS CONVERSION ===== */
 function hebrewNumToLetters(n) {
@@ -714,61 +720,92 @@ function todayISO() {
   return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
 }
 
-function storageKey(name) { return 'quiz_user_' + name.trim().toLowerCase(); }
+/* ===== FIREBASE HELPERS ===== */
+function safeName(name) {
+  // Firebase keys may not contain . # $ / [ ]
+  return name.trim().toLowerCase().replace(/[.#$/[\]]/g, '_');
+}
+function userRef(name) { return db.ref('users/' + safeName(name)); }
 
-function loadUser(name) {
-  const key = storageKey(name);
-  const raw = localStorage.getItem(key);
+/* ===== USER / TOKEN PERSISTENCE (Firebase) ===== */
+async function loadUserFromFirebase(name) {
+  const ref = userRef(name);
+  const snap = await ref.once('value');
   const today = todayDateKey();
-  if (raw) {
-    const data = JSON.parse(raw);
-    // Preserve joinDate, reset tokens if new day
-    const joinDate = data.joinDate || todayISO();
+  if (snap.exists()) {
+    const data = snap.val();
     if (data.day === today) {
-      return { tokens: data.tokens, day: today, joinDate };
+      return data;
     } else {
-      const fresh = { tokens: TOKENS_START, day: today, joinDate };
-      localStorage.setItem(key, JSON.stringify(fresh));
-      return fresh;
+      // New day — reset tokens, keep everything else
+      await ref.update({ tokens: TOKENS_START, day: today });
+      return { ...data, tokens: TOKENS_START, day: today };
     }
   } else {
     const fresh = { tokens: TOKENS_START, day: today, joinDate: todayISO(), displayName: name };
-    localStorage.setItem(key, JSON.stringify(fresh));
+    await ref.set(fresh);
     return fresh;
   }
 }
 
-function saveTokens() {
+function startUserListener(name) {
+  if (_userListener) _userListener();
+  _userListener = userRef(name).on('value', snap => {
+    if (!snap.exists()) return;
+    const data = snap.val();
+    // Sync tokens when admin changes them from another device
+    if (typeof data.tokens === 'number' && data.tokens !== tokens) {
+      tokens = data.tokens;
+      const el = document.getElementById('homeUserTokens');
+      if (el) el.textContent = '🪙 ' + tokens;
+      const td = document.getElementById('tokenDisplay');
+      if (td) td.textContent = tokens;
+    }
+    userData = data;
+  });
+}
+
+async function saveTokens() {
   if (!currentUser) return;
-  const key = storageKey(currentUser);
-  const day = todayDateKey();
-  const existing = localStorage.getItem(key);
-  const existingData = existing ? JSON.parse(existing) : {};
-  // NEVER overwrite an existing joinDate — only set it if missing
-  const joinDate = existingData.joinDate || null;
-  const toSave = { tokens, day };
-  if (joinDate) toSave.joinDate = joinDate;
-  localStorage.setItem(key, JSON.stringify(toSave));
+  userData.tokens = tokens;
+  userData.day = todayDateKey();
+  await userRef(currentUser).update({ tokens, day: todayDateKey() });
   const el = document.getElementById('homeUserTokens');
   if (el) el.textContent = '🪙 ' + tokens;
 }
 
-function doLogin() {
+async function doLogin() {
   const input = document.getElementById('loginInput');
   const name = input.value.trim();
   const err = document.getElementById('loginError');
   if (!name) { err.classList.add('show'); return; }
   err.classList.remove('show');
-  currentUser = name;
-  const data = loadUser(name);
-  tokens = data.tokens;
-  document.getElementById('loginPage').style.display = 'none';
-  showHome();
+  const btn = document.querySelector('.login-btn');
+  const origText = btn.textContent;
+  btn.textContent = '⏳ מתחבר...';
+  btn.disabled = true;
+  try {
+    const data = await loadUserFromFirebase(name);
+    currentUser = name;
+    userData = data;
+    tokens = typeof data.tokens === 'number' ? data.tokens : TOKENS_START;
+    startUserListener(name);
+    document.getElementById('loginPage').style.display = 'none';
+    showHome();
+  } catch(e) {
+    err.textContent = '⚠️ שגיאת חיבור — בדוק/י אינטרנט ונסה שוב';
+    err.classList.add('show');
+  } finally {
+    btn.textContent = origText;
+    btn.disabled = false;
+  }
 }
 
 function doLogout() {
+  if (_userListener) { _userListener(); _userListener = null; }
   saveTokens();
   currentUser = null;
+  userData = {};
   document.getElementById('loginInput').value = '';
   document.getElementById('homePage').style.display = 'none';
   document.getElementById('quizPage').style.display = 'none';
@@ -781,20 +818,13 @@ function showHome() {
   document.getElementById('homeUserName').textContent = '👋 שלום, ' + currentUser;
   document.getElementById('homeUserMonth').textContent = new Intl.DateTimeFormat('he-IL',{weekday:'long',day:'numeric',month:'long'}).format(new Date());
   document.getElementById('homeUserTokens').textContent = '🪙 ' + tokens;
-  // Show join date
-  const key = storageKey(currentUser);
-  const raw = localStorage.getItem(key);
-  const data = raw ? JSON.parse(raw) : {};
-  const hadJoinDate = !!data.joinDate;
-  const joinDate = data.joinDate || null;
+  const joinDate = userData.joinDate || null;
   const joinEl = document.getElementById('homeUserJoin');
-  if (!hadJoinDate) {
-    // Ask user to enter their real registration date
+  if (!joinDate) {
     joinEl.innerHTML =
       '📅 מתי נרשמת? ' +
       '<input type="date" id="joinDatePicker" style="background:rgba(19,23,38,0.9);border:1px solid var(--border);border-radius:6px;color:var(--text);padding:2px 6px;font-family:Rubik,sans-serif;font-size:0.78rem;" />' +
       ' <button onclick="saveJoinDate()" style="background:var(--accent);border:none;border-radius:6px;padding:2px 8px;color:#0a0e1a;font-family:Rubik,sans-serif;font-size:0.78rem;cursor:pointer;font-weight:700;">שמור</button>';
-    // Default the picker to yesterday
     const picker = document.getElementById('joinDatePicker');
     const yest = new Date(); yest.setDate(yest.getDate()-1);
     picker.value = yest.toISOString().slice(0,10);
@@ -804,16 +834,13 @@ function showHome() {
   }
 }
 
-function saveJoinDate() {
+async function saveJoinDate() {
   const picker = document.getElementById('joinDatePicker');
   if (!picker || !picker.value) return;
-  const key = storageKey(currentUser);
-  const raw = localStorage.getItem(key);
-  const data = raw ? JSON.parse(raw) : { tokens, month: getMonthKey() };
-  data.joinDate = picker.value;
-  localStorage.setItem(key, JSON.stringify(data));
-  // Re-render
-  const dates = toHebrewDate(picker.value);
+  const joinDate = picker.value;
+  userData.joinDate = joinDate;
+  await userRef(currentUser).update({ joinDate });
+  const dates = toHebrewDate(joinDate);
   document.getElementById('homeUserJoin').innerHTML =
     '📅 נרשמת: ' + dates.greg + '<br>✡️ ' + dates.heb;
 }
@@ -822,11 +849,7 @@ function saveJoinDate() {
 document.getElementById('loginInput').addEventListener('keydown', e => { if (e.key === 'Enter') doLogin(); });
 
 /* ===== TOKEN SHOP ===== */
-const TOKEN_CODES = {
-  '2323': 10,
-  '3232': 30,
-  '2233': 100
-};
+const TOKEN_CODES = { '2323': 10, '3232': 30, '2233': 100 };
 const MAX_CODE_USES_PER_DAY = 3;
 
 function todayDateKey() {
@@ -835,19 +858,19 @@ function todayDateKey() {
 }
 
 function getCodeUsage(code) {
-  // Returns how many times THIS user used THIS code today
-  const key = 'codeuse_' + storageKey(currentUser) + '_' + code;
-  const raw = localStorage.getItem(key);
-  if (!raw) return 0;
-  const data = JSON.parse(raw);
-  if (data.day !== todayDateKey()) return 0; // new day → reset
-  return data.count || 0;
+  const codeUsage = userData.codeUsage || {};
+  const entry = codeUsage[code];
+  if (!entry) return 0;
+  if (entry.day !== todayDateKey()) return 0;
+  return entry.count || 0;
 }
 
-function incrementCodeUsage(code) {
-  const key = 'codeuse_' + storageKey(currentUser) + '_' + code;
+async function incrementCodeUsage(code) {
   const count = getCodeUsage(code) + 1;
-  localStorage.setItem(key, JSON.stringify({ day: todayDateKey(), count }));
+  const entry = { day: todayDateKey(), count };
+  if (!userData.codeUsage) userData.codeUsage = {};
+  userData.codeUsage[code] = entry;
+  await userRef(currentUser).child('codeUsage').child(code).set(entry);
 }
 
 function openShop() {
@@ -879,7 +902,7 @@ function updateShopMsg(text, color) {
   msg.style.color = color;
   msg.textContent = text;
 }
-function redeemCode() {
+async function redeemCode() {
   const input  = document.getElementById('shopCodeInput');
   const code   = input.value.trim();
   const amount = TOKEN_CODES[code];
@@ -895,14 +918,14 @@ function redeemCode() {
   const remaining = unlimited ? 999 : (MAX_CODE_USES_PER_DAY - usedToday);
 
   if (remaining <= 0) {
-    updateShopMsg(`⛔ השתמשת בקוד זה 3/3 פעמים היום. יתאפס מחר!`, 'var(--red)');
+    updateShopMsg('⛔ השתמשת בקוד זה 3/3 פעמים היום. יתאפס מחר!', 'var(--red)');
     input.value = '';
     return;
   }
 
-  if (!unlimited) incrementCodeUsage(code);
+  if (!unlimited) await incrementCodeUsage(code);
   tokens += amount;
-  saveTokens();
+  await saveTokens();
   input.value = '';
 
   let usesMsg = '';
@@ -945,37 +968,32 @@ function verifyAdmin() {
   setTimeout(() => document.getElementById('adminTargetUser').focus(), 100);
 }
 
-function getAllUsers() {
+async function getAllUsers() {
+  const snap = await db.ref('users').once('value');
+  if (!snap.exists()) return [];
   const users = [];
-  for (let i = 0; i < localStorage.length; i++) {
-    const key = localStorage.key(i);
-    if (!key.startsWith('quiz_user_')) continue;
-    // Skip sub-keys like admin_answers_ and admin_unlimited_ and codeuse_
-    if (key.includes('admin_') || key.includes('codeuse_')) continue;
-    try {
-      const data = JSON.parse(localStorage.getItem(key));
-      // Recover original display name from the data if stored, else reconstruct from key
-      const displayName = data.displayName || key.replace('quiz_user_', '');
-      users.push({ key, displayName, tokens: data.tokens || 0, joinDate: data.joinDate || null });
-    } catch(e) {}
-  }
-  return users.sort((a,b) => a.displayName.localeCompare(b.displayName));
+  snap.forEach(child => {
+    const data = child.val();
+    users.push({ key: child.key, displayName: data.displayName || child.key, tokens: data.tokens || 0, joinDate: data.joinDate || null, unlimited: data.unlimited, answers: data.answers });
+  });
+  return users.sort((a,b) => a.displayName.localeCompare(b.displayName, 'he'));
 }
 
-function renderUsersList() {
+async function renderUsersList() {
   const container = document.getElementById('adminUsersList');
-  const users = getAllUsers();
+  container.innerHTML = '<div style="color:#7a7d90;font-size:0.8rem;text-align:center;">טוען...</div>';
+  const users = await getAllUsers();
   if (!users.length) {
     container.innerHTML = '<div style="color:#7a7d90;font-size:0.8rem;text-align:center;">אין משתמשים רשומים עדיין</div>';
     return;
   }
   container.innerHTML = '';
   users.forEach(u => {
-    const unlimited = isUnlimitedToday(u.displayName);
-    const answers   = !!getAnswersAccess(u.displayName);
+    const isUnlim = u.unlimited === todayDateKey();
+    const hasAnswers = u.answers && (u.answers.minutes === 999 || (u.answers.until && Date.now() < u.answers.until));
     const badges = [
-      unlimited ? '<span style="background:rgba(76,175,125,0.2);color:#4caf7d;border-radius:4px;padding:1px 5px;font-size:0.68rem;">🪙 חופשי</span>' : '',
-      answers   ? '<span style="background:rgba(212,168,83,0.2);color:#d4a853;border-radius:4px;padding:1px 5px;font-size:0.68rem;">👁️ תשובות</span>' : ''
+      isUnlim    ? '<span style="background:rgba(76,175,125,0.2);color:#4caf7d;border-radius:4px;padding:1px 5px;font-size:0.68rem;">🪙 חופשי</span>' : '',
+      hasAnswers ? '<span style="background:rgba(212,168,83,0.2);color:#d4a853;border-radius:4px;padding:1px 5px;font-size:0.68rem;">👁️ תשובות</span>' : ''
     ].filter(Boolean).join(' ');
     const row = document.createElement('div');
     row.style.cssText = 'display:flex;align-items:center;justify-content:space-between;background:rgba(255,255,255,0.03);border:1px solid #252c48;border-radius:8px;padding:0.45rem 0.7rem;cursor:pointer;transition:background 0.15s;gap:0.5rem;';
@@ -983,7 +1001,7 @@ function renderUsersList() {
     row.onmouseout  = () => row.style.background = 'rgba(255,255,255,0.03)';
     row.onclick = () => {
       document.getElementById('adminTargetUser').value = u.displayName;
-      refreshAdminStatus(); renderUsersList();
+      refreshAdminStatus();
       document.getElementById('adminTargetUser').scrollIntoView({ behavior: 'smooth', block: 'center' });
     };
     row.innerHTML =
@@ -994,50 +1012,40 @@ function renderUsersList() {
   });
 }
 
-function unlimitedKey(username) {
-  return 'admin_unlimited_' + storageKey(username);
-}
-
 function isUnlimitedToday(username) {
-  const raw = localStorage.getItem(unlimitedKey(username));
-  if (!raw) return false;
-  const data = JSON.parse(raw);
-  return data.day === todayDateKey();
+  if (!username || username === currentUser) return userData.unlimited === todayDateKey();
+  return false; // for other users, admin reads directly from Firebase
 }
 
-function refreshAdminStatus() {
+function getAnswersAccess(username) {
+  const data = (!username || username === currentUser) ? userData : null;
+  if (!data || !data.answers) return null;
+  const a = data.answers;
+  if (a.minutes === 999) return a;
+  if (!a.until || Date.now() > a.until) return null;
+  return a;
+}
+
+async function refreshAdminStatus() {
   const name = document.getElementById('adminTargetUser').value.trim();
   const box = document.getElementById('adminStatusBox');
   if (!name) { box.textContent = ''; return; }
-  const userKey = storageKey(name);
-  const raw = localStorage.getItem(userKey);
-  if (!raw) { box.innerHTML = `<span style="color:#e05c5c;">⚠️ משתמש "${name}" לא קיים</span>`; return; }
-  const userData = JSON.parse(raw);
-  const unlimited = isUnlimitedToday(name);
-  const answersInfo = getAnswersAccess(name);
+  const snap = await userRef(name).once('value');
+  if (!snap.exists()) { box.innerHTML = `<span style="color:#e05c5c;">⚠️ משתמש "${name}" לא קיים</span>`; return; }
+  const data = snap.val();
+  const unlimited = data.unlimited === todayDateKey();
   let answersText = '🔒 ללא גישה לתשובות';
-  if (answersInfo) {
-    if (answersInfo.minutes === 999) answersText = '👁️ תשובות: ללא הגבלת זמן';
-    else {
-      const left = Math.max(0, Math.round((answersInfo.until - Date.now()) / 60000));
-      answersText = left > 0 ? `👁️ תשובות: נותרו ${left} דק׳` : '⏰ גישה לתשובות פגה';
-    }
+  if (data.answers) {
+    if (data.answers.minutes === 999) answersText = '👁️ תשובות: ללא הגבלת זמן';
+    else if (data.answers.until && Date.now() < data.answers.until) {
+      const left = Math.max(0, Math.round((data.answers.until - Date.now()) / 60000));
+      answersText = `👁️ תשובות: נותרו ${left} דק׳`;
+    } else { answersText = '⏰ גישה לתשובות פגה'; }
   }
   box.innerHTML =
-    `<b style="color:#e8c97a;">${name}</b> · 🪙 ${userData.tokens||0} טוקנים<br>` +
+    `<b style="color:#e8c97a;">${data.displayName || name}</b> · 🪙 ${data.tokens || 0} טוקנים<br>` +
     `<span style="color:${unlimited?'#4caf7d':'#7a7d90'};">${unlimited?'✅ קודים ללא הגבלה':'🔒 קודים רגיל'}</span><br>` +
-    `<span style="color:${answersInfo?'#d4a853':'#7a7d90'};">${answersText}</span>`;
-}
-
-function answersKey(username) { return 'admin_answers_' + storageKey(username); }
-
-function getAnswersAccess(username) {
-  const raw = localStorage.getItem(answersKey(username));
-  if (!raw) return null;
-  const data = JSON.parse(raw);
-  if (data.minutes === 999) return data;
-  if (Date.now() > data.until) { localStorage.removeItem(answersKey(username)); return null; }
-  return data;
+    `<span style="color:${data.answers && (data.answers.minutes===999||(data.answers.until&&Date.now()<data.answers.until))?'#d4a853':'#7a7d90'};">${answersText}</span>`;
 }
 
 let selectedDuration = null;
@@ -1050,73 +1058,65 @@ function setAnswerDuration(mins) {
   document.getElementById('adminAnswerMinutes').value = (mins !== 999) ? mins : '';
 }
 
-function grantAnswers() {
+async function grantAnswers() {
   const name = document.getElementById('adminTargetUser').value.trim();
   const msg  = document.getElementById('adminPanelMsg');
   if (!name) { msg.style.color='var(--red)'; msg.textContent='הכנס שם משתמש/ת'; return; }
-  if (!localStorage.getItem(storageKey(name))) { msg.style.color='var(--red)'; msg.textContent=`משתמש "${name}" לא קיים`; return; }
+  const snap = await userRef(name).once('value');
+  if (!snap.exists()) { msg.style.color='var(--red)'; msg.textContent=`משתמש "${name}" לא קיים`; return; }
   const manualVal = parseInt(document.getElementById('adminAnswerMinutes').value);
   const minutes = manualVal > 0 ? manualVal : selectedDuration;
   if (!minutes) { msg.style.color='var(--red)'; msg.textContent='בחר/י משך זמן'; return; }
   const until = minutes === 999 ? null : Date.now() + minutes * 60000;
-  localStorage.setItem(answersKey(name), JSON.stringify({ minutes, until }));
+  await userRef(name).update({ answers: { minutes, until } });
   const label = minutes === 999 ? 'ללא הגבלת זמן' : `${minutes} דקות`;
   msg.style.color='#d4a853'; msg.textContent=`👁️ ${name} יכול/ה לראות תשובות — ${label}`;
   refreshAdminStatus(); renderUsersList();
 }
 
-function revokeAnswers() {
+async function revokeAnswers() {
   const name = document.getElementById('adminTargetUser').value.trim();
   const msg  = document.getElementById('adminPanelMsg');
   if (!name) return;
-  localStorage.removeItem(answersKey(name));
+  await userRef(name).update({ answers: null });
   msg.style.color='#7a7d90'; msg.textContent=`גישה לתשובות בוטלה עבור ${name}`;
   refreshAdminStatus(); renderUsersList();
 }
 
-function setUserTokens() {
+async function setUserTokens() {
   const name   = document.getElementById('adminTargetUser').value.trim();
   const msg    = document.getElementById('adminPanelMsg');
   const amount = parseInt(document.getElementById('adminTokensAmount').value);
   if (!name) { msg.style.color='var(--red)'; msg.textContent='הכנס שם משתמש/ת'; return; }
   if (isNaN(amount) || amount < 0) { msg.style.color='var(--red)'; msg.textContent='הכנס מספר תקין'; return; }
-  const key = storageKey(name);
-  const raw = localStorage.getItem(key);
-  if (!raw) { msg.style.color='var(--red)'; msg.textContent=`משתמש "${name}" לא קיים`; return; }
-  const data = JSON.parse(raw);
-  const prev = data.tokens || 0;
-  data.tokens = amount;
-  localStorage.setItem(key, JSON.stringify(data));
-  // If this is the currently logged-in user, update live
-  if (currentUser && currentUser.trim().toLowerCase() === name.trim().toLowerCase()) {
-    tokens = amount;
-    const el = document.getElementById('homeUserTokens');
-    if (el) el.textContent = '🪙 ' + tokens;
-    const td = document.getElementById('tokenDisplay');
-    if (td) td.textContent = tokens;
-  }
+  const ref = userRef(name);
+  const snap = await ref.once('value');
+  if (!snap.exists()) { msg.style.color='var(--red)'; msg.textContent=`משתמש "${name}" לא קיים`; return; }
+  const prev = snap.val().tokens || 0;
+  await ref.update({ tokens: amount });
   msg.style.color='#e05c5c';
   msg.textContent=`✅ ${name}: ${prev} → ${amount} טוקנים`;
   document.getElementById('adminTokensAmount').value = '';
   refreshAdminStatus(); renderUsersList();
 }
 
-function grantUnlimited() {
+async function grantUnlimited() {
   const name = document.getElementById('adminTargetUser').value.trim();
   const msg  = document.getElementById('adminPanelMsg');
   if (!name) { msg.style.color='var(--red)'; msg.textContent='הכנס שם משתמש/ת'; return; }
-  if (!localStorage.getItem(storageKey(name))) { msg.style.color='var(--red)'; msg.textContent=`משתמש "${name}" לא קיים`; return; }
-  localStorage.setItem(unlimitedKey(name), JSON.stringify({ day: todayDateKey() }));
+  const snap = await userRef(name).once('value');
+  if (!snap.exists()) { msg.style.color='var(--red)'; msg.textContent=`משתמש "${name}" לא קיים`; return; }
+  await userRef(name).update({ unlimited: todayDateKey() });
   msg.style.color = 'var(--green)';
   msg.textContent = `✅ ${name} יכול/ה להשתמש בקודים ללא הגבלה היום!`;
   refreshAdminStatus(); renderUsersList();
 }
 
-function revokeUnlimited() {
+async function revokeUnlimited() {
   const name = document.getElementById('adminTargetUser').value.trim();
   const msg  = document.getElementById('adminPanelMsg');
   if (!name) { msg.style.color='var(--red)'; msg.textContent='הכנס שם משתמש/ת'; return; }
-  localStorage.removeItem(unlimitedKey(name));
+  await userRef(name).update({ unlimited: null });
   msg.style.color = '#7a7d90';
   msg.textContent = `הרשאת שימוש חופשי בוטלה עבור ${name}`;
   refreshAdminStatus(); renderUsersList();
