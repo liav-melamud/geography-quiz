@@ -475,7 +475,18 @@
         <button onclick="revokeAnswers()" style="width:100%;padding:0.6rem;background:rgba(224,92,92,0.1);border:1px solid rgba(224,92,92,0.35);border-radius:10px;color:#e05c5c;font-family:'Rubik',sans-serif;font-size:0.82rem;cursor:pointer;font-weight:600;">🚫 בטל גישה לתשובות</button>
       </div>
 
-      <!-- SECTION 3: Set tokens -->
+      <!-- SECTION 3: Rename user -->
+      <div style="background:rgba(130,100,220,0.06);border:1px solid rgba(130,100,220,0.2);border-radius:12px;padding:1rem;margin-bottom:0.8rem;">
+        <div style="font-size:0.82rem;color:#a070ee;font-weight:700;margin-bottom:0.7rem;text-align:right;">✏️ שינוי שם תצוגה</div>
+        <div style="display:flex;gap:0.5rem;align-items:center;">
+          <input id="adminNewName" type="text" maxlength="30" placeholder="שם חדש..."
+            style="flex:1;background:rgba(19,23,38,0.9);border:1px solid #252c48;border-radius:8px;padding:0.6rem 0.8rem;color:#e8e4d9;font-family:'Rubik',sans-serif;font-size:1rem;outline:none;text-align:right;"
+            onkeydown="if(event.key==='Enter')renameUser()"/>
+          <button onclick="renameUser()" style="padding:0.6rem 1rem;background:#a070ee;border:none;border-radius:8px;color:#fff;font-family:'Rubik',sans-serif;font-weight:700;font-size:0.88rem;cursor:pointer;white-space:nowrap;">שנה</button>
+        </div>
+      </div>
+
+      <!-- SECTION 4: Set tokens -->
       <div style="background:rgba(224,92,92,0.06);border:1px solid rgba(224,92,92,0.2);border-radius:12px;padding:1rem;margin-bottom:0.8rem;">
         <div style="font-size:0.82rem;color:#e05c5c;font-weight:700;margin-bottom:0.7rem;text-align:right;">⚖️ קביעת כמות טוקנים</div>
         <div style="font-size:0.75rem;color:#7a7d90;margin-bottom:0.5rem;text-align:right;">הספרה שתכניס = מה שיהיה לו. לא מוסיף — מחליף.</div>
@@ -1169,6 +1180,33 @@ async function grantUnlimited() {
   await userRef(name).update({ unlimited: todayDateKey() });
   msg.style.color = 'var(--green)';
   msg.textContent = `✅ ${name} יכול/ה להשתמש בקודים ללא הגבלה היום!`;
+  refreshAdminStatus(); renderUsersList();
+}
+
+async function renameUser() {
+  const name    = document.getElementById('adminTargetUser').value.trim();
+  const newName = document.getElementById('adminNewName').value.trim();
+  const msg     = document.getElementById('adminPanelMsg');
+  if (!name)    { msg.style.color='var(--red)'; msg.textContent='הכנס שם משתמש/ת'; return; }
+  if (!newName) { msg.style.color='var(--red)'; msg.textContent='הכנס שם חדש'; return; }
+  if (newName === name) { msg.style.color='var(--red)'; msg.textContent='השם החדש זהה לנוכחי'; return; }
+  const snap = await userRef(name).once('value');
+  if (!snap.exists()) { msg.style.color='var(--red)'; msg.textContent=`משתמש "${name}" לא קיים`; return; }
+  // Write existing data under new name, update displayName
+  const existingData = snap.val();
+  existingData.displayName = newName;
+  await userRef(newName).set(existingData);
+  await userRef(name).set(null);
+  // If this is the currently logged-in user, update live
+  if (currentUser && safeName(currentUser) === safeName(name)) {
+    currentUser = newName;
+    userData.displayName = newName;
+    document.getElementById('homeUserName').textContent = '👋 שלום, ' + newName;
+  }
+  document.getElementById('adminTargetUser').value = newName;
+  document.getElementById('adminNewName').value = '';
+  msg.style.color='#a070ee';
+  msg.textContent=`✅ שם שונה: ${name} → ${newName}`;
   refreshAdminStatus(); renderUsersList();
 }
 
