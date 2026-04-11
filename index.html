@@ -650,7 +650,7 @@ const ALL_QUESTIONS = {
   ]
 };
 
-const HINT_COST=3, TOKENS_START=30;
+const HINT_COST=3, TOKENS_START=9;
 let currentLevel=null, tokens=TOKENS_START, hintsRevealed=[], answered=[], correctCount=0, wrongAttempts=[], QUESTIONS=[];
 let currentUser = null;
 
@@ -719,20 +719,20 @@ function storageKey(name) { return 'quiz_user_' + name.trim().toLowerCase(); }
 function loadUser(name) {
   const key = storageKey(name);
   const raw = localStorage.getItem(key);
-  const month = getMonthKey();
+  const today = todayDateKey();
   if (raw) {
     const data = JSON.parse(raw);
-    // Preserve joinDate, reset tokens if new month
+    // Preserve joinDate, reset tokens if new day
     const joinDate = data.joinDate || todayISO();
-    if (data.month === month) {
-      return { tokens: data.tokens, month, joinDate };
+    if (data.day === today) {
+      return { tokens: data.tokens, day: today, joinDate };
     } else {
-      const fresh = { tokens: TOKENS_START, month, joinDate };
+      const fresh = { tokens: TOKENS_START, day: today, joinDate };
       localStorage.setItem(key, JSON.stringify(fresh));
       return fresh;
     }
   } else {
-    const fresh = { tokens: TOKENS_START, month, joinDate: todayISO(), displayName: name };
+    const fresh = { tokens: TOKENS_START, day: today, joinDate: todayISO(), displayName: name };
     localStorage.setItem(key, JSON.stringify(fresh));
     return fresh;
   }
@@ -741,12 +741,12 @@ function loadUser(name) {
 function saveTokens() {
   if (!currentUser) return;
   const key = storageKey(currentUser);
-  const month = getMonthKey();
+  const day = todayDateKey();
   const existing = localStorage.getItem(key);
   const existingData = existing ? JSON.parse(existing) : {};
   // NEVER overwrite an existing joinDate — only set it if missing
   const joinDate = existingData.joinDate || null;
-  const toSave = { tokens, month };
+  const toSave = { tokens, day };
   if (joinDate) toSave.joinDate = joinDate;
   localStorage.setItem(key, JSON.stringify(toSave));
   const el = document.getElementById('homeUserTokens');
@@ -779,7 +779,7 @@ function showHome() {
   document.getElementById('homePage').style.display = 'flex';
   document.getElementById('quizPage').style.display = 'none';
   document.getElementById('homeUserName').textContent = '👋 שלום, ' + currentUser;
-  document.getElementById('homeUserMonth').textContent = getMonthLabel();
+  document.getElementById('homeUserMonth').textContent = new Intl.DateTimeFormat('he-IL',{weekday:'long',day:'numeric',month:'long'}).format(new Date());
   document.getElementById('homeUserTokens').textContent = '🪙 ' + tokens;
   // Show join date
   const key = storageKey(currentUser);
