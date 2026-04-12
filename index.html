@@ -498,6 +498,19 @@
         </div>
       </div>
 
+      <!-- SECTION 5: Block / unblock -->
+      <div style="background:rgba(255,140,0,0.06);border:1px solid rgba(255,140,0,0.25);border-radius:12px;padding:1rem;margin-bottom:0.8rem;">
+        <div style="font-size:0.82rem;color:#ff8c00;font-weight:700;margin-bottom:0.6rem;text-align:right;">🚫 חסימת שחקן</div>
+        <button onclick="blockUser()" style="width:100%;padding:0.7rem;background:#ff8c00;border:none;border-radius:10px;color:#0a0e1a;font-family:'Rubik',sans-serif;font-weight:700;font-size:0.88rem;cursor:pointer;margin-bottom:0.4rem;">🚫 חסום משתמש</button>
+        <button onclick="unblockUser()" style="width:100%;padding:0.6rem;background:transparent;border:1px solid rgba(255,140,0,0.35);border-radius:10px;color:#ff8c00;font-family:'Rubik',sans-serif;font-size:0.82rem;cursor:pointer;">✅ בטל חסימה</button>
+      </div>
+
+      <!-- SECTION 6: Delete user -->
+      <div style="background:rgba(100,100,100,0.06);border:1px solid rgba(150,150,150,0.2);border-radius:12px;padding:1rem;margin-bottom:0.8rem;">
+        <div style="font-size:0.82rem;color:#aaa;font-weight:700;margin-bottom:0.6rem;text-align:right;">🗑️ מחיקת משתמש</div>
+        <button onclick="deleteUser()" style="width:100%;padding:0.7rem;background:rgba(150,150,150,0.15);border:1px solid rgba(150,150,150,0.3);border-radius:10px;color:#ccc;font-family:'Rubik',sans-serif;font-weight:700;font-size:0.88rem;cursor:pointer;">🗑️ מחק משתמש לצמיתות</button>
+      </div>
+
       <p id="adminPanelMsg" style="font-size:0.88rem;min-height:1.2em;text-align:center;margin-bottom:0.7rem;font-weight:600;"></p>
       <button onclick="closeAdmin()" style="width:100%;padding:0.7rem;background:transparent;border:1px solid #252c48;border-radius:12px;color:#7a7d90;font-family:'Rubik',sans-serif;font-size:0.85rem;cursor:pointer;">סגור</button>
     </div>
@@ -857,6 +870,13 @@ async function doLogin() {
   btn.disabled = true;
   try {
     const data = await loadUserFromFirebase(name);
+    if (data.blocked) {
+      err.textContent = '🚫 המשתמש שלך חסום. פנה למנהל.';
+      err.classList.add('show');
+      btn.textContent = origText;
+      btn.disabled = false;
+      return;
+    }
     currentUser = name;
     userData = data;
     tokens = typeof data.tokens === 'number' ? data.tokens : TOKENS_START;
@@ -1115,6 +1135,7 @@ async function refreshAdminStatus() {
   }
   box.innerHTML =
     `<b style="color:#e8c97a;">${data.displayName || name}</b> · 🪙 ${data.tokens || 0} טוקנים<br>` +
+    `<span style="color:${data.blocked?'#ff8c00':'#7a7d90'};">${data.blocked?'🚫 חסום':'✅ פעיל'}</span> · ` +
     `<span style="color:${unlimited?'#4caf7d':'#7a7d90'};">${unlimited?'✅ קודים ללא הגבלה':'🔒 קודים רגיל'}</span><br>` +
     `<span style="color:${data.answers && (data.answers.minutes===999||(data.answers.until&&Date.now()<data.answers.until))?'#d4a853':'#7a7d90'};">${answersText}</span>`;
 }
@@ -1181,6 +1202,38 @@ async function grantUnlimited() {
   msg.style.color = 'var(--green)';
   msg.textContent = `✅ ${name} יכול/ה להשתמש בקודים ללא הגבלה היום!`;
   refreshAdminStatus(); renderUsersList();
+}
+
+async function blockUser() {
+  const name = document.getElementById('adminTargetUser').value.trim();
+  const msg  = document.getElementById('adminPanelMsg');
+  if (!name) { msg.style.color='var(--red)'; msg.textContent='הכנס שם משתמש/ת'; return; }
+  const snap = await userRef(name).once('value');
+  if (!snap.exists()) { msg.style.color='var(--red)'; msg.textContent=`משתמש "${name}" לא קיים`; return; }
+  await userRef(name).update({ blocked: true });
+  msg.style.color='#ff8c00'; msg.textContent=`🚫 ${name} חסום`;
+  refreshAdminStatus(); renderUsersList();
+}
+
+async function unblockUser() {
+  const name = document.getElementById('adminTargetUser').value.trim();
+  const msg  = document.getElementById('adminPanelMsg');
+  if (!name) { msg.style.color='var(--red)'; msg.textContent='הכנס שם משתמש/ת'; return; }
+  await userRef(name).update({ blocked: null });
+  msg.style.color='var(--green)'; msg.textContent=`✅ חסימת ${name} בוטלה`;
+  refreshAdminStatus(); renderUsersList();
+}
+
+async function deleteUser() {
+  const name = document.getElementById('adminTargetUser').value.trim();
+  const msg  = document.getElementById('adminPanelMsg');
+  if (!name) { msg.style.color='var(--red)'; msg.textContent='הכנס שם משתמש/ת'; return; }
+  if (!confirm(`בטוח/י שרוצה/ה למחוק את המשתמש "${name}" לצמיתות?`)) return;
+  await userRef(name).set(null);
+  document.getElementById('adminTargetUser').value = '';
+  document.getElementById('adminStatusBox').textContent = '';
+  msg.style.color='#aaa'; msg.textContent=`🗑️ המשתמש "${name}" נמחק`;
+  renderUsersList();
 }
 
 async function renameUser() {
