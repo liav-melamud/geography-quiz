@@ -870,6 +870,15 @@ async function doLogin() {
   btn.disabled = true;
   try {
     const data = await loadUserFromFirebase(name);
+    // Check if username is reserved (previously deleted)
+    const deletedSnap = await db.ref('deleted_names/' + safeName(name)).once('value');
+    if (deletedSnap.exists()) {
+      err.textContent = '❌ שם זה אינו זמין לשימוש. בחר/י שם אחר.';
+      err.classList.add('show');
+      btn.textContent = origText;
+      btn.disabled = false;
+      return;
+    }
     if (data.blocked) {
       err.textContent = '🚫 המשתמש שלך חסום. פנה למנהל.';
       err.classList.add('show');
@@ -1228,11 +1237,13 @@ async function deleteUser() {
   const name = document.getElementById('adminTargetUser').value.trim();
   const msg  = document.getElementById('adminPanelMsg');
   if (!name) { msg.style.color='var(--red)'; msg.textContent='הכנס שם משתמש/ת'; return; }
-  if (!confirm(`בטוח/י שרוצה/ה למחוק את המשתמש "${name}" לצמיתות?`)) return;
+  if (!confirm(`בטוח/י שרוצה/ה למחוק את המשתמש "${name}" לצמיתות? השם ייחסם ולא יהיה ניתן ליצור משתמש חדש בשם זה.`)) return;
+  // Reserve the name in a blacklist before deleting
+  await db.ref('deleted_names/' + safeName(name)).set({ deletedAt: Date.now(), originalName: name });
   await userRef(name).set(null);
   document.getElementById('adminTargetUser').value = '';
   document.getElementById('adminStatusBox').textContent = '';
-  msg.style.color='#aaa'; msg.textContent=`🗑️ המשתמש "${name}" נמחק`;
+  msg.style.color='#aaa'; msg.textContent=`🗑️ המשתמש "${name}" נמחק והשם יוחסם`;
   renderUsersList();
 }
 
