@@ -1021,7 +1021,7 @@ async function saveTokens() {
 }
 
 /* ===== PLANE TRANSITION ===== */
-function planeTransition(callback) {
+function _runPlaneTransition(callback) {
   const overlay  = document.getElementById('plane-overlay');
   const wrap     = document.getElementById('plane-wrap');
   const worldBg  = document.getElementById('world-bg');
@@ -1110,6 +1110,7 @@ async function doLogin() {
       showHome();
     });
   } catch(e) {
+    console.error('doLogin error:', e);
     err.textContent = '⚠️ שגיאת חיבור — בדוק/י אינטרנט ונסה שוב';
     err.classList.add('show');
   } finally {
@@ -1764,10 +1765,9 @@ function stopMusic() {
 }
 
 // Apply plane setting
-const _origPlaneTransition = planeTransition;
 function planeTransition(cb) {
   if (!appSettings.plane) { cb(); return; }
-  _origPlaneTransition(cb);
+  _runPlaneTransition(cb);
 }
 
 // Auto-start music if setting is on (requires user gesture first — handled on first interaction)
