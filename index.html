@@ -383,6 +383,96 @@
     .diff-card { min-width:140px; }
   }
 
+  /* ===== SETTINGS BUTTON ===== */
+  .settings-btn {
+    position: fixed;
+    top: 1rem;
+    left: 1rem;
+    z-index: 9000;
+    background: rgba(19,23,38,0.85);
+    border: 1px solid var(--border);
+    border-radius: 50%;
+    width: 2.6rem;
+    height: 2.6rem;
+    font-size: 1.2rem;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: background 0.2s, transform 0.3s;
+    backdrop-filter: blur(6px);
+    color: var(--text);
+  }
+  .settings-btn:hover { background: rgba(40,50,80,0.95); transform: rotate(45deg); }
+
+  /* ===== SETTINGS MODAL ===== */
+  #settingsOverlay {
+    display: none;
+    position: fixed;
+    inset: 0;
+    z-index: 9500;
+    background: rgba(0,0,0,0.7);
+    backdrop-filter: blur(8px);
+    align-items: center;
+    justify-content: center;
+  }
+  .settings-modal {
+    background: #0f1422;
+    border: 1px solid var(--border);
+    border-radius: 24px;
+    padding: 2rem 1.8rem;
+    width: 100%;
+    max-width: 360px;
+    margin: 1rem;
+    box-shadow: 0 30px 80px rgba(0,0,0,0.7);
+  }
+  .settings-title {
+    font-family: 'Noto Serif Hebrew', serif;
+    font-size: 1.5rem;
+    font-weight: 900;
+    color: var(--accent);
+    text-align: center;
+    margin-bottom: 1.5rem;
+  }
+  .settings-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0.85rem 0;
+    border-bottom: 1px solid var(--border);
+    gap: 1rem;
+  }
+  .settings-row:last-of-type { border-bottom: none; }
+  .settings-label {
+    font-size: 0.95rem;
+    color: var(--text);
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+  /* Toggle switch */
+  .toggle-wrap { position: relative; width: 46px; height: 26px; flex-shrink: 0; }
+  .toggle-wrap input { opacity: 0; width: 0; height: 0; }
+  .toggle-slider {
+    position: absolute;
+    inset: 0;
+    background: #252c48;
+    border-radius: 999px;
+    cursor: pointer;
+    transition: background 0.25s;
+  }
+  .toggle-slider::before {
+    content: '';
+    position: absolute;
+    width: 20px; height: 20px;
+    left: 3px; bottom: 3px;
+    background: #fff;
+    border-radius: 50%;
+    transition: transform 0.25s;
+  }
+  .toggle-wrap input:checked + .toggle-slider { background: var(--accent); }
+  .toggle-wrap input:checked + .toggle-slider::before { transform: translateX(20px); }
+
   /* ===== PLANE TRANSITION OVERLAY ===== */
   #plane-overlay {
     position: fixed;
@@ -1592,7 +1682,125 @@ function addCountdownBadge(text) {
   }
   badge.textContent = text;
 }
+
+/* ===== SETTINGS ===== */
+const DEFAULT_SETTINGS = { plane: true, music: false };
+let appSettings = (() => {
+  try { return Object.assign({}, DEFAULT_SETTINGS, JSON.parse(localStorage.getItem('quiz_settings'))); }
+  catch(e) { return { ...DEFAULT_SETTINGS }; }
+})();
+
+function saveSetting(key, value) {
+  appSettings[key] = value;
+  localStorage.setItem('quiz_settings', JSON.stringify(appSettings));
+  if (key === 'music') {
+    if (value) startMusic();
+    else stopMusic();
+  }
+}
+
+function openSettings() {
+  document.getElementById('togglePlane').checked = appSettings.plane;
+  document.getElementById('toggleMusic').checked = appSettings.music;
+  document.getElementById('settingsOverlay').style.display = 'flex';
+}
+function closeSettings(e) {
+  if (e && e.target !== document.getElementById('settingsOverlay')) return;
+  document.getElementById('settingsOverlay').style.display = 'none';
+}
+
+/* ===== BACKGROUND MUSIC (Web Audio API) ===== */
+let _audioCtx = null, _musicNodes = [];
+
+function _getCtx() {
+  if (!_audioCtx) _audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  return _audioCtx;
+}
+
+function _makeNote(ctx, freq, startTime, duration, gainVal) {
+  const osc  = ctx.createOscillator();
+  const gain = ctx.createGain();
+  osc.type = 'sine';
+  osc.frequency.setValueAtTime(freq, startTime);
+  gain.gain.setValueAtTime(0, startTime);
+  gain.gain.linearRampToValueAtTime(gainVal, startTime + 0.08);
+  gain.gain.setValueAtTime(gainVal, startTime + duration - 0.1);
+  gain.gain.linearRampToValueAtTime(0, startTime + duration);
+  osc.connect(gain);
+  gain.connect(ctx.destination);
+  osc.start(startTime);
+  osc.stop(startTime + duration);
+  return osc;
+}
+
+// Gentle ambient loop: repeating arpeggiated Cmaj7 chord
+const MUSIC_NOTES = [261.63, 329.63, 392.00, 493.88, 523.25, 392.00, 329.63, 261.63]; // C4 E4 G4 B4 C5 G4 E4 C4
+const NOTE_DUR = 0.6;
+let _musicTimer = null;
+
+function _scheduleLoop() {
+  if (!appSettings.music) return;
+  const ctx  = _getCtx();
+  const t0   = ctx.currentTime + 0.05;
+  MUSIC_NOTES.forEach((freq, i) => {
+    _makeNote(ctx, freq, t0 + i * NOTE_DUR, NOTE_DUR * 0.85, 0.07);
+  });
+  // Also add a quiet low drone (bass)
+  _makeNote(ctx, 65.41, t0, MUSIC_NOTES.length * NOTE_DUR, 0.04); // C2 drone
+  const loopDuration = MUSIC_NOTES.length * NOTE_DUR;
+  _musicTimer = setTimeout(_scheduleLoop, (loopDuration - 0.1) * 1000);
+}
+
+function startMusic() {
+  if (_musicTimer) return;
+  _getCtx().resume().then(_scheduleLoop);
+}
+
+function stopMusic() {
+  if (_musicTimer) { clearTimeout(_musicTimer); _musicTimer = null; }
+}
+
+// Apply plane setting
+const _origPlaneTransition = planeTransition;
+function planeTransition(cb) {
+  if (!appSettings.plane) { cb(); return; }
+  _origPlaneTransition(cb);
+}
+
+// Auto-start music if setting is on (requires user gesture first — handled on first interaction)
+document.addEventListener('click', function _firstClick() {
+  if (appSettings.music && !_musicTimer) startMusic();
+  document.removeEventListener('click', _firstClick);
+}, { once: true });
 </script>
+
+<!-- ===== SETTINGS BUTTON (fixed) ===== -->
+<button class="settings-btn" id="settingsBtn" onclick="openSettings()" title="הגדרות">⚙️</button>
+
+<!-- ===== SETTINGS MODAL ===== -->
+<div id="settingsOverlay" onclick="closeSettings(event)" style="display:none;position:fixed;inset:0;z-index:9500;background:rgba(0,0,0,0.7);backdrop-filter:blur(8px);align-items:center;justify-content:center;">
+  <div class="settings-modal" onclick="event.stopPropagation()">
+    <div class="settings-title">⚙️ הגדרות</div>
+
+    <div class="settings-row">
+      <span class="settings-label">✈️ אנימציית מטוס</span>
+      <label class="toggle-wrap">
+        <input type="checkbox" id="togglePlane" onchange="saveSetting('plane',this.checked)">
+        <span class="toggle-slider"></span>
+      </label>
+    </div>
+
+    <div class="settings-row">
+      <span class="settings-label">🎵 מוזיקת רקע</span>
+      <label class="toggle-wrap">
+        <input type="checkbox" id="toggleMusic" onchange="saveSetting('music',this.checked)">
+        <span class="toggle-slider"></span>
+      </label>
+    </div>
+
+    <button onclick="closeSettings()" style="margin-top:1.2rem;width:100%;padding:0.75rem;background:transparent;border:1px solid var(--border);border-radius:12px;color:var(--muted);font-family:'Rubik',sans-serif;font-size:0.9rem;cursor:pointer;">סגור</button>
+  </div>
+</div>
 
 <!-- ===== PLANE TRANSITION OVERLAY ===== -->
 <div id="plane-overlay">
