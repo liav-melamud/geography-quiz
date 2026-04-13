@@ -1061,12 +1061,14 @@ function planeTransition(callback) {
 
   setTimeout(() => {
     callback();
+    overlay.style.pointerEvents = 'none'; // let content underneath be interactive immediately
     overlay.style.transition = 'opacity 0.35s ease';
     overlay.style.opacity = '0';
     setTimeout(() => {
       overlay.style.display = 'none';
       overlay.style.opacity = '1';
       overlay.style.transition = '';
+      overlay.style.pointerEvents = '';
       worldBg.style.zIndex = '-1';
       starsDiv.innerHTML = '';
     }, 350);
@@ -1758,6 +1760,7 @@ function startMusic() {
 
 function stopMusic() {
   if (_musicTimer) { clearTimeout(_musicTimer); _musicTimer = null; }
+  if (_audioCtx) _audioCtx.suspend(); // immediately silence all scheduled audio
 }
 
 // Apply plane setting
