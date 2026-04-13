@@ -826,6 +826,23 @@ async function loadUserFromFirebase(name) {
       return { ...data, tokens: TOKENS_START, day: today };
     }
   } else {
+    // Check for old-format localStorage data before creating a new user
+    const oldKey = 'quiz_user_' + name.trim().toLowerCase();
+    const oldRaw = localStorage.getItem(oldKey);
+    if (oldRaw) {
+      try {
+        const oldData = JSON.parse(oldRaw);
+        const migrated = {
+          tokens: typeof oldData.tokens === 'number' ? oldData.tokens : TOKENS_START,
+          day: today,
+          joinDate: oldData.joinDate || todayISO(),
+          displayName: name
+        };
+        await ref.set(migrated);
+        localStorage.removeItem(oldKey);
+        return migrated;
+      } catch(e) { /* fall through to fresh */ }
+    }
     const fresh = { tokens: TOKENS_START, day: today, joinDate: todayISO(), displayName: name };
     await ref.set(fresh);
     return fresh;
@@ -869,21 +886,19 @@ async function doLogin() {
   btn.textContent = '⏳ מתחבר...';
   btn.disabled = true;
   try {
-    const data = await loadUserFromFirebase(name);
-    // Check if username is reserved (previously deleted)
+    // 1. Check if name is reserved (previously deleted) BEFORE creating anything
     const deletedSnap = await db.ref('deleted_names/' + safeName(name)).once('value');
     if (deletedSnap.exists()) {
       err.textContent = '❌ שם זה אינו זמין לשימוש. בחר/י שם אחר.';
       err.classList.add('show');
-      btn.textContent = origText;
-      btn.disabled = false;
       return;
     }
+    // 2. Load or create user
+    const data = await loadUserFromFirebase(name);
+    // 3. Check if blocked
     if (data.blocked) {
       err.textContent = '🚫 המשתמש שלך חסום. פנה למנהל.';
       err.classList.add('show');
-      btn.textContent = origText;
-      btn.disabled = false;
       return;
     }
     currentUser = name;
