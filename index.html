@@ -391,19 +391,20 @@
     display: none;
     align-items: center;
     justify-content: center;
-    background: radial-gradient(ellipse at center, #0d1a40 0%, #050a1c 100%);
+    background: transparent;
     overflow: hidden;
+    pointer-events: all;
   }
-  #plane-overlay.stars::before {
-    content: '✦ ✧ ✦ ✧ ✦ ✧ ✦ ✧ ✦ ✧ ✦';
+  .plane-star {
     position: absolute;
-    top: 20%;
-    width: 100%;
-    text-align: center;
-    font-size: 1.2rem;
-    color: rgba(255,255,255,0.18);
-    letter-spacing: 2rem;
+    border-radius: 50%;
+    background: #fff;
     pointer-events: none;
+    animation: star-twinkle 1.2s ease-in-out infinite alternate;
+  }
+  @keyframes star-twinkle {
+    0%   { opacity: var(--so); transform: scale(1); }
+    100% { opacity: calc(var(--so) * 0.3); transform: scale(0.7); }
   }
   #plane-wrap {
     display: flex;
@@ -931,15 +932,43 @@ async function saveTokens() {
 
 /* ===== PLANE TRANSITION ===== */
 function planeTransition(callback) {
-  const overlay = document.getElementById('plane-overlay');
-  const wrap    = document.getElementById('plane-wrap');
+  const overlay  = document.getElementById('plane-overlay');
+  const wrap     = document.getElementById('plane-wrap');
+  const worldBg  = document.getElementById('world-bg');
+  const starsDiv = document.getElementById('plane-stars');
+
+  // Generate random stars
+  starsDiv.innerHTML = '';
+  const count = 90 + Math.floor(Math.random() * 40);
+  for (let i = 0; i < count; i++) {
+    const s = document.createElement('div');
+    s.className = 'plane-star';
+    const size = 1 + Math.random() * 2.5;
+    const opacity = 0.4 + Math.random() * 0.6;
+    s.style.cssText = [
+      'left:'   + (Math.random() * 100) + '%',
+      'top:'    + (Math.random() * 100) + '%',
+      'width:'  + size + 'px',
+      'height:' + size + 'px',
+      '--so:'   + opacity,
+      'opacity:' + opacity,
+      'animation-delay:' + (Math.random() * 1.5) + 's',
+      'animation-duration:' + (0.8 + Math.random() * 1.2) + 's'
+    ].join(';');
+    starsDiv.appendChild(s);
+  }
+
+  // Raise world-bg so it shows through overlay
+  worldBg.style.zIndex = '99998';
+
   // Reset CSS animation
   wrap.style.animation = 'none';
-  void wrap.offsetWidth; // force reflow
+  void wrap.offsetWidth;
   wrap.style.animation = '';
   overlay.style.opacity = '1';
   overlay.style.transition = '';
   overlay.style.display = 'flex';
+
   setTimeout(() => {
     callback();
     overlay.style.transition = 'opacity 0.35s ease';
@@ -948,6 +977,8 @@ function planeTransition(callback) {
       overlay.style.display = 'none';
       overlay.style.opacity = '1';
       overlay.style.transition = '';
+      worldBg.style.zIndex = '-1';
+      starsDiv.innerHTML = '';
     }, 350);
   }, 3000);
 }
@@ -1564,7 +1595,8 @@ function addCountdownBadge(text) {
 </script>
 
 <!-- ===== PLANE TRANSITION OVERLAY ===== -->
-<div id="plane-overlay" class="stars">
+<div id="plane-overlay">
+  <div id="plane-stars"></div>
   <div id="plane-wrap">
     <span id="plane-emoji">✈️</span>
     <span id="plane-flag">🇮🇱</span>
